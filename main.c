@@ -87,7 +87,7 @@ const char* getEventName(int id)
     return NULL;
 }
 
-void parseEventNames()
+void parseEventNames(int printOnly)
 {
     FILE* auditEventsFile = fopen("/etc/security/audit_event", "r");
 
@@ -121,15 +121,22 @@ void parseEventNames()
                             strncpy(part, begin, length);
                             part[length] = 0;
 
-                            struct EventInfo *e = NULL;
-                            HASH_FIND_INT(eventNames, &id, e);
-                            if (NULL == e)
+                            if (printOnly)
                             {
-                                e = (struct EventInfo*)malloc(sizeof(struct EventInfo));
-                                memset(e, 0, sizeof(struct EventInfo));
-                                e->id = id;
-                                strcpy(e->name, part);
-                                HASH_ADD_INT(eventNames, id, e);
+                                printf("%d: %s\n", id, part);
+                            }
+                            else
+                            {
+                                struct EventInfo *e = NULL;
+                                HASH_FIND_INT(eventNames, &id, e);
+                                if (NULL == e)
+                                {
+                                    e = (struct EventInfo*)malloc(sizeof(struct EventInfo));
+                                    memset(e, 0, sizeof(struct EventInfo));
+                                    e->id = id;
+                                    strcpy(e->name, part);
+                                    HASH_ADD_INT(eventNames, id, e);
+                                }
                             }
                         }
                     }
@@ -145,9 +152,111 @@ void parseEventNames()
     }
 }
 
+void printUsage(const char* name)
+{
+    printf("Usage:  %s [-p pid | process_name] [-e event_id] path_filter\n", name);
+    printf("        %s -l\n", name);
+    printf("Arguments:\n");
+    printf("\t-p pid | process_name      Filter by process id if it is a number otherwise process_name.\n");
+    printf("\t-e event_id                Filter by event_id.\n");
+    printf("\t-l                         List event id and names.\n");
+}
+
+void parseArgs(int argc, char** argv, int* eventFilter, int* pidFilter, char* processFilter, char* pathFilter)
+{
+    int ret_option = 0;
+    while ((ret_option = getopt (argc, argv, ":p:e:l")) != -1)
+    {
+        switch (ret_option)
+        {
+            case 'l':
+                parseEventNames(1);
+                exit(0);
+            break;
+            case 'p':
+                if (optarg == NULL || (optarg && optarg[0] == '-'))
+                {
+                    printf("error: missing argument for -p\n");
+                    printUsage(argv[0]);
+                    exit(1);
+                }
+                else
+                {
+                    //try integer parse first for pid
+                    if (sscanf(optarg, "%d", pidFilter) > 0)
+                    {
+                        printf("Using pid %d for process filtering.\n", *pidFilter);
+                    }
+                    else
+                    {
+                        strcpy(processFilter, optarg);
+                        printf("Using name '%s' for process filtering.\n", processFilter);
+                    }
+                }
+            break;
+            case 'e':
+                if (optarg == NULL || (optarg && optarg[0] == '-'))
+                {
+                    printf("error: missing argument for -e\n");
+                    printUsage(argv[0]);
+                    exit(1);
+                }
+                else
+                {
+                    if (sscanf(optarg, "%d", eventFilter) > 0)
+                    {
+                        printf("Using %d for event filtering.\n", *eventFilter);
+                    }
+                    else
+                    {
+                        printf("error: missing event_id number for -e\n");
+                        printUsage(argv[0]);
+                        exit(1);
+                    }
+                }
+            break;
+            case ':':
+                printf("error: missing argument for -%c\n", optopt);
+                printUsage(argv[0]);
+                exit(1);
+            break;
+            case '?':
+                printf("error: unknown argument -%c\n", optopt);
+                printUsage(argv[0]);
+                exit(1);
+            break;
+            default:
+            
+            break;
+        }
+    }
+
+    if (optind < argc)
+    {
+        strcpy(pathFilter, argv[optind]);
+        printf("Using '%s' for path filtering.\n", pathFilter);
+    }
+    else
+    {
+        printf("error: missing argument path_filter\n");
+        printUsage(argv[0]);
+        exit(1);
+    }
+    
+}
+
 
 int main(int argc, char** argv)
 {
+    int eventFilter = 0;
+    int pidFilter = 0;
+    char processFilter[64];
+    char pathFilter[128];
+    memset(processFilter, 0, sizeof(processFilter));
+    memset(pathFilter, 0, sizeof(pathFilter));
+
+    parseArgs(argc, argv, &eventFilter, &pidFilter, processFilter, pathFilter);
+
     const char* pipePath = "/dev/auditpipe";
 
     if (argc < 2)
@@ -156,10 +265,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    parseEventNames();
-
-    const char* filter = argv[1];
-    printf("Watching:%s\n", filter);
+    parseEventNames(0);
 
     FILE* pipeFile = fopen(pipePath, "r");
     int fd = fileno(pipeFile);
@@ -247,9 +353,29 @@ int main(int argc, char** argv)
 
         free(buffer);
 
-        if (strstr(entry.path, filter) != NULL)
+        if (strstr(entry.path, pathFilter) != NULL)
         {
-            printf("path:%s event:%s(%d) process:%s(%d)\n", entry.path, getEventName(entry.type), entry.type, getProcessName(entry.pid), entry.pid);
+            int print = 1;
+
+            const char * processName = getProcessName(entry.pid);
+            
+            if (pidFilter > 0 && pidFilter != entry.pid)
+            {
+                print = 0;
+            }
+            else if (eventFilter > 0 && eventFilter != entry.type)
+            {
+                print = 0;
+            }
+            else if (processFilter[0] != 0 && strstr(processName, processFilter) == NULL)
+            {
+                print = 0;
+            }
+
+            if (print)
+            {
+                printf("path:%s event:%s(%d) process:%s(%d)\n", entry.path, getEventName(entry.type), entry.type, processName, entry.pid);
+            }
         }
     }
 
