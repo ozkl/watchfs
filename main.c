@@ -27,7 +27,15 @@ struct ProcessInfo
     UT_hash_handle hh; /* makes this structure hashable */
 };
 
+struct EventInfo
+{
+    int id;
+    char name[128];
+    UT_hash_handle hh; /* makes this structure hashable */
+};
+
 struct ProcessInfo *processes = NULL;
+struct EventInfo *eventNames = NULL;
 
 void updateProcess(int pid)
 {
@@ -65,6 +73,78 @@ const char* getProcessName(int pid)
     return NULL;
 }
 
+const char* getEventName(int id)
+{
+    struct EventInfo *e = NULL;
+
+    HASH_FIND_INT(eventNames, &id, e);
+
+    if (NULL != e)
+    {
+        return e->name;
+    }
+
+    return NULL;
+}
+
+void parseEventNames()
+{
+    FILE* auditEventsFile = fopen("/etc/security/audit_event", "r");
+
+    if (auditEventsFile)
+    {
+        char part[512];
+        char lineBuffer[512];
+        memset(part, 0, sizeof(part));
+        memset(lineBuffer, 0, sizeof(lineBuffer));
+        while (fgets(lineBuffer, sizeof(lineBuffer), auditEventsFile))
+        {
+            char* begin = lineBuffer;
+            char* end = strchr(begin, ':');
+
+            if (end)
+            {
+                int length = end - begin;
+                if (length > 0)
+                {
+                    strncpy(part, begin, length);
+                    part[length] = 0;
+                    int id = 0;
+                    if (sscanf(part, "%d", &id) > 0)
+                    {
+                        begin = end + 1;
+
+                        end = strchr(begin, ':');
+                        length = end - begin;
+                        if (length > 0)
+                        {
+                            strncpy(part, begin, length);
+                            part[length] = 0;
+
+                            struct EventInfo *e = NULL;
+                            HASH_FIND_INT(eventNames, &id, e);
+                            if (NULL == e)
+                            {
+                                e = (struct EventInfo*)malloc(sizeof(struct EventInfo));
+                                memset(e, 0, sizeof(struct EventInfo));
+                                e->id = id;
+                                strcpy(e->name, part);
+                                HASH_ADD_INT(eventNames, id, e);
+                            }
+                        }
+                    }
+                }
+                
+            }
+            
+            memset(part, 0, sizeof(part));
+            memset(lineBuffer, 0, sizeof(lineBuffer));
+        }
+        
+        fclose(auditEventsFile);
+    }
+}
+
 
 int main(int argc, char** argv)
 {
@@ -75,6 +155,8 @@ int main(int argc, char** argv)
         printf("Enter an argument to filter");
         return 0;
     }
+
+    parseEventNames();
 
     const char* filter = argv[1];
     printf("Watching:%s\n", filter);
@@ -167,7 +249,7 @@ int main(int argc, char** argv)
 
         if (strstr(entry.path, filter) != NULL)
         {
-            printf("path:%s action:%d process:%d(%s)\n", entry.path, entry.type, entry.pid, getProcessName(entry.pid));
+            printf("path:%s event:%s(%d) process:%s(%d)\n", entry.path, getEventName(entry.type), entry.type, getProcessName(entry.pid), entry.pid);
         }
     }
 
