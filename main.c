@@ -259,9 +259,9 @@ int main(int argc, char** argv)
 
     const char* pipePath = "/dev/auditpipe";
 
-    if (argc < 2)
+    if (geteuid() != 0)
     {
-        printf("Enter an argument to filter");
+        printf("error: need root privileges!\n");
         return 0;
     }
 
